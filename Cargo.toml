@@ -1,3 +1,6 @@
+[workspace]
+members = ["eink-spectra6-driver"]
+
 [package]
 edition      = "2024"
 name         = "screen-test"
@@ -65,6 +68,8 @@ trouble-host = { version = "0.5.0", features = ["gatt"] }
 
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
+
+eink-spectra6-driver = { path = "eink-spectra6-driver" }
 
 
 [profile.dev]

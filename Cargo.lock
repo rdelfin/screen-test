@@ -312,6 +312,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eink-spectra6-driver"
+version = "0.1.0"
+
+[[package]]
 name = "embassy-embedded-hal"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1524,6 +1528,7 @@ dependencies = [
  "bt-hci",
  "critical-section",
  "defmt 1.0.1",
+ "eink-spectra6-driver",
  "embassy-executor",
  "embassy-net",
  "embassy-time",
