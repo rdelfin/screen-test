@@ -4,3 +4,24 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = { version = "1.0", default-features = false }
+embedded-hal = "1.0"
+esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }
+thiserror = { version = "2.0", default-features = false }
+
+[dev-dependencies]
+embedded-test = { version = "0.7.0", features = ["xtensa-semihosting"] }
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units    = 1     # LLVM can perform better optimizations using a single thread
+debug            = 2
+debug-assertions = false
+incremental      = false
+lto              = 'fat'
+opt-level        = 's'
+overflow-checks  = false

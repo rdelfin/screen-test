@@ -71,6 +71,9 @@ static_cell      = "2.1.1"
 
 eink-spectra6-driver = { path = "eink-spectra6-driver" }
 
+[dev-dependencies]
+embedded-test = { version = "0.7.0", features = ["xtensa-semihosting"] }
+
 
 [profile.dev]
 # Rust debug is too slow.

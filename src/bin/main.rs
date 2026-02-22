@@ -9,6 +9,7 @@
 
 use bt_hci::controller::ExternalController;
 use defmt::info;
+use eink_spectra6_driver::EpaperPort;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
@@ -47,6 +48,22 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0);
 
     info!("Embassy initialized!");
+
+    let mut eink_port = EpaperPort::new(
+        peripherals.SPI3,
+        peripherals.GPIO10,
+        peripherals.GPIO9,
+        peripherals.GPIO11,
+        peripherals.GPIO8,
+        peripherals.GPIO12,
+        peripherals.GPIO13,
+        800,
+        480,
+        1350,
+        1350,
+    )
+    .expect("Failed to initialize EpaperPort");
+    eink_port.display_checkerboard();
 
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     let (mut _wifi_controller, _interfaces) =
