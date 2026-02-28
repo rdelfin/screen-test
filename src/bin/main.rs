@@ -59,11 +59,11 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.GPIO13,
         800,
         480,
-        1350,
-        1350,
     )
     .expect("Failed to initialize EpaperPort");
+    info!("EpaperPort initialized!");
     eink_port.display_checkerboard();
+    info!("Displayed checkerboard!");
 
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     let (mut _wifi_controller, _interfaces) =

@@ -1,8 +1,6 @@
 #![no_std]
 
-use embedded_hal::spi::SpiBus;
 use esp_hal::delay::Delay;
-use esp_hal::dma_buffers;
 use esp_hal::gpio::interconnect::PeripheralOutput;
 use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin};
 use esp_hal::spi::Mode;
@@ -16,8 +14,6 @@ pub struct EpaperPort<'d> {
     busy: Input<'d>,
     width: u16,
     height: u16,
-    scale_max_width: u16,
-    scale_max_height: u16,
 }
 
 impl<'d> EpaperPort<'d> {
@@ -31,8 +27,6 @@ impl<'d> EpaperPort<'d> {
         busy: impl InputPin + 'd,
         width: u16,
         height: u16,
-        scale_max_width: u16,
-        scale_max_height: u16,
     ) -> anyhow::Result<Self> {
         let spi_config = Config::default()
             .with_mode(Mode::_0)
@@ -52,8 +46,6 @@ impl<'d> EpaperPort<'d> {
             busy,
             width,
             height,
-            scale_max_width,
-            scale_max_height,
         };
         port.init();
         Ok(port)
@@ -150,25 +142,44 @@ impl<'d> EpaperPort<'d> {
         self.wait_busy();
     }
 
-    /// Sends a checkerboard pattern to the display: every pixel alternates between
-    /// black and white, and the pattern inverts on each row.
+    /// Sends a pattern to the display that exercises all six available colors.
+    ///
+    /// Pixel (x, y) is assigned color PALETTE[(x + y) % 6], producing diagonal
+    /// stripes one pixel wide. Each row is offset by one color relative to the
+    /// previous, so every color appears in every column and every row.
+    ///
+    /// The six colors in palette order: Black(0x0), White(0x1), Yellow(0x2),
+    /// Red(0x3), Blue(0x5), Green(0x6).
     ///
     /// Pixel encoding: 4bpp, 2 pixels per byte (high nibble = even x, low nibble = odd x).
-    /// Black=0x0, White=0x1.
-    /// - Even rows: byte 0x01 (black at even x, white at odd x)
-    /// - Odd rows:  byte 0x10 (white at even x, black at odd x)
+    /// The 6-pixel color cycle maps to a 3-byte pattern that repeats across each row.
     pub fn display_checkerboard(&mut self) {
+        // 4-bit color codes for the six available pigments, in cycle order.
+        const PALETTE: [u8; 6] = [0x0, 0x1, 0x2, 0x3, 0x5, 0x6];
+
         let row_bytes = (self.width / 2) as usize;
 
         self.send_command(0x10);
         for row in 0..self.height {
-            let byte = if row % 2 == 0 { 0x01u8 } else { 0x10u8 };
-            let mut remaining = row_bytes;
-            while remaining > 0 {
-                let chunk_size = remaining.min(64);
-                let chunk = [byte; 64];
+            // Phase shifts the palette by one per row, creating the diagonal.
+            let p = (row as usize) % 6;
+
+            // Six consecutive pixels pack into exactly 3 bytes, then repeat.
+            let pattern = [
+                (PALETTE[p] << 4) | PALETTE[(p + 1) % 6],
+                (PALETTE[(p + 2) % 6] << 4) | PALETTE[(p + 3) % 6],
+                (PALETTE[(p + 4) % 6] << 4) | PALETTE[(p + 5) % 6],
+            ];
+
+            let mut sent = 0;
+            while sent < row_bytes {
+                let chunk_size = (row_bytes - sent).min(64);
+                let mut chunk = [0u8; 64];
+                for i in 0..chunk_size {
+                    chunk[i] = pattern[(sent + i) % 3];
+                }
                 self.send_data_buf(&chunk[..chunk_size]);
-                remaining -= chunk_size;
+                sent += chunk_size;
             }
         }
 
