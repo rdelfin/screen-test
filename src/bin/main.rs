@@ -62,7 +62,7 @@ async fn main(spawner: Spawner) -> ! {
     )
     .expect("Failed to initialize EpaperPort");
     info!("EpaperPort initialized!");
-    eink_port.display_checkerboard();
+    eink_port.display_sample();
     info!("Displayed checkerboard!");
 
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
