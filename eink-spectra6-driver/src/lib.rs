@@ -7,9 +7,15 @@ use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config, Instance, Spi};
 use esp_hal::time::Rate;
 
+pub struct Coordinates {
+    pub x: u16,
+    pub y: u16,
+}
+
 pub struct EpaperPort<'d> {
     spi: Spi<'d, esp_hal::Blocking>,
     dc: Output<'d>,
+    cs: Output<'d>,
     rst: Output<'d>,
     busy: Input<'d>,
     width: u16,
@@ -20,7 +26,7 @@ impl<'d> EpaperPort<'d> {
     pub fn new(
         spi: impl Instance + 'd,
         sck: impl PeripheralOutput<'d>,
-        cs: impl PeripheralOutput<'d>,
+        cs: impl OutputPin + 'd,
         mosi: impl PeripheralOutput<'d>,
         dc: impl OutputPin + 'd,
         rst: impl OutputPin + 'd,
@@ -33,42 +39,67 @@ impl<'d> EpaperPort<'d> {
             .with_frequency(Rate::from_mhz(40));
         let spi = Spi::new(spi, spi_config)?
             .with_sck(sck)
-            .with_mosi(mosi)
-            .with_cs(cs);
+            .with_mosi(mosi);
         let dc = Output::new(dc, Level::Low, OutputConfig::default());
+        let cs = Output::new(cs, Level::High, OutputConfig::default());
         let rst = Output::new(rst, Level::High, OutputConfig::default());
         let busy = Input::new(busy, InputConfig::default());
 
         let mut port = EpaperPort {
             spi,
             dc,
+            cs,
             rst,
             busy,
             width,
             height,
         };
         port.init();
+        port.clear();
         Ok(port)
     }
 
     fn send_command(&mut self, cmd: u8) {
         self.dc.set_low();
+        self.cs.set_low();
         self.spi.write(&[cmd]).ok();
+        self.cs.set_high();
     }
 
     fn send_data(&mut self, data: u8) {
         self.dc.set_high();
+        self.cs.set_low();
         self.spi.write(&[data]).ok();
+        self.cs.set_high();
     }
 
     fn send_data_buf(&mut self, data: &[u8]) {
         self.dc.set_high();
+        self.cs.set_low();
+        self.spi.write(data).ok();
+        self.cs.set_high();
+    }
+
+    // Holds CS low for the duration of a large pixel data transfer.
+    fn begin_pixels(&mut self) {
+        self.dc.set_high();
+        self.cs.set_low();
+    }
+
+    fn send_pixels_chunk(&mut self, data: &[u8]) {
         self.spi.write(data).ok();
     }
 
+    fn end_pixels(&mut self) {
+        self.cs.set_high();
+    }
+
     fn wait_busy(&mut self) {
+        let delay = Delay::new();
         // HIGH = display ready, LOW = display still processing
-        while self.busy.is_low() {}
+        while self.busy.is_low() {
+            delay.delay_millis(10);
+        }
     }
 
     fn reset(&mut self) {
@@ -83,6 +114,9 @@ impl<'d> EpaperPort<'d> {
 
     fn init(&mut self) {
         self.reset();
+        self.wait_busy();
+        let delay = Delay::new();
+        delay.delay_millis(50);
 
         self.send_command(0xAA);
         self.send_data_buf(&[0x49, 0x55, 0x20, 0x08, 0x09, 0x18]);
@@ -142,6 +176,56 @@ impl<'d> EpaperPort<'d> {
         self.wait_busy();
     }
 
+    /// Fills a rectangular region with a solid color and the rest of the screen with white.
+    ///
+    /// Coordinates are clamped to the display bounds. `color` is a 4-bit palette code:
+    /// Black(0x0), White(0x1), Yellow(0x2), Red(0x3), Blue(0x5), Green(0x6).
+    pub fn fill_rect(&mut self, x: u16, y: u16, width: u16, height: u16, color: u8) {
+        let x0 = x as usize;
+        let y0 = y as usize;
+        let x1 = (x + width).min(self.width) as usize;
+        let y1 = (y + height).min(self.height) as usize;
+
+        let row_bytes = (self.width / 2) as usize;
+
+        self.send_command(0x10);
+        self.begin_pixels();
+
+        for row in 0..self.height as usize {
+            let in_row = row >= y0 && row < y1;
+            let mut sent = 0usize;
+            while sent < row_bytes {
+                let chunk_size = (row_bytes - sent).min(64);
+                let mut chunk = [0u8; 64];
+                for i in 0..chunk_size {
+                    let px = (sent + i) * 2;
+                    let c0 = if in_row && px >= x0 && px < x1 {
+                        color
+                    } else {
+                        0x1
+                    };
+                    let c1 = if in_row && px + 1 >= x0 && px + 1 < x1 {
+                        color
+                    } else {
+                        0x1
+                    };
+                    chunk[i] = (c0 << 4) | c1;
+                }
+                self.send_pixels_chunk(&chunk[..chunk_size]);
+                sent += chunk_size;
+            }
+        }
+
+        self.end_pixels();
+        self.turn_on_display();
+    }
+
+    /// Clears the display to solid white. Called automatically on initialisation.
+    pub fn clear(&mut self) {
+        let (w, h) = (self.width, self.height);
+        self.fill_rect(0, 0, w, h, 0x1);
+    }
+
     /// Sends a pattern to the display that exercises all six available colors.
     ///
     /// Pixel (x, y) is assigned color PALETTE[(x + y) % 6], producing diagonal
@@ -160,6 +244,7 @@ impl<'d> EpaperPort<'d> {
         let row_bytes = (self.width / 2) as usize;
 
         self.send_command(0x10);
+        self.begin_pixels();
         for row in 0..self.height {
             // Phase shifts the palette by one per row, creating the diagonal.
             let p = (row as usize) % 6;
@@ -178,10 +263,11 @@ impl<'d> EpaperPort<'d> {
                 for i in 0..chunk_size {
                     chunk[i] = pattern[(sent + i) % 3];
                 }
-                self.send_data_buf(&chunk[..chunk_size]);
+                self.send_pixels_chunk(&chunk[..chunk_size]);
                 sent += chunk_size;
             }
         }
+        self.end_pixels();
 
         self.turn_on_display();
     }
@@ -223,22 +309,35 @@ impl<'d> EpaperPort<'d> {
         // ── "MEXICO" text (5×7 font, 10× scale) ─────────────────────────────
         // Bit 4 of each row byte = leftmost column pixel.
         const GLYPHS: [[u8; 7]; 6] = [
-            [0b10001, 0b11011, 0b10101, 0b10001, 0b10001, 0b10001, 0b10001], // M
-            [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111], // E
-            [0b10001, 0b01010, 0b01010, 0b00100, 0b01010, 0b01010, 0b10001], // X
-            [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111], // I
-            [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111], // C
-            [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // O
+            [
+                0b10001, 0b11011, 0b10101, 0b10001, 0b10001, 0b10001, 0b10001,
+            ], // M
+            [
+                0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+            ], // E
+            [
+                0b10001, 0b01010, 0b01010, 0b00100, 0b01010, 0b01010, 0b10001,
+            ], // X
+            [
+                0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+            ], // I
+            [
+                0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
+            ], // C
+            [
+                0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+            ], // O
         ];
         let scale: i32 = 10;
         let char_w: i32 = 5 * scale; // 50 px
         let char_h: i32 = 7 * scale; // 70 px
-        let gap: i32 = scale;        // 10 px between glyphs
+        let gap: i32 = scale; // 10 px between glyphs
         let text_w: i32 = 6 * char_w + 5 * gap; // 350 px
-        let text_x0: i32 = (w - text_w) / 2;    // 225
+        let text_x0: i32 = (w - text_w) / 2; // 225
         let text_y0: i32 = 388;
 
         self.send_command(0x10);
+        self.begin_pixels();
 
         for y in 0..h {
             let color = |x: i32| -> u8 {
@@ -263,9 +362,7 @@ impl<'d> EpaperPort<'d> {
                 }
 
                 // ── 2 px black border ────────────────────────────────────────
-                if y < flag_y0 + 2 || y >= flag_y1 - 2
-                    || x < flag_x0 + 2 || x >= flag_x1 - 2
-                {
+                if y < flag_y0 + 2 || y >= flag_y1 - 2 || x < flag_x0 + 2 || x >= flag_x1 - 2 {
                     return BLACK;
                 }
 
@@ -295,11 +392,12 @@ impl<'d> EpaperPort<'d> {
                     let x = ((sent + i) * 2) as i32;
                     chunk[i] = (color(x) << 4) | color(x + 1);
                 }
-                self.send_data_buf(&chunk[..chunk_size]);
+                self.send_pixels_chunk(&chunk[..chunk_size]);
                 sent += chunk_size;
             }
         }
 
+        self.end_pixels();
         self.turn_on_display();
     }
 }
