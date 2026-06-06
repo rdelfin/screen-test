@@ -37,9 +37,7 @@ impl<'d> EpaperPort<'d> {
         let spi_config = Config::default()
             .with_mode(Mode::_0)
             .with_frequency(Rate::from_mhz(40));
-        let spi = Spi::new(spi, spi_config)?
-            .with_sck(sck)
-            .with_mosi(mosi);
+        let spi = Spi::new(spi, spi_config)?.with_sck(sck).with_mosi(mosi);
         let dc = Output::new(dc, Level::Low, OutputConfig::default());
         let cs = Output::new(cs, Level::High, OutputConfig::default());
         let rst = Output::new(rst, Level::High, OutputConfig::default());
@@ -80,8 +78,9 @@ impl<'d> EpaperPort<'d> {
         self.cs.set_high();
     }
 
-    // Holds CS low for the duration of a large pixel data transfer.
+    // Opens DTM (0x10) and holds CS low for the duration of a large pixel data transfer.
     fn begin_pixels(&mut self) {
+        self.send_command(0x10);
         self.dc.set_high();
         self.cs.set_low();
     }
@@ -112,67 +111,116 @@ impl<'d> EpaperPort<'d> {
         delay.delay_millis(50);
     }
 
+    fn send_sequence_label(&mut self) {
+        self.send_command(0xAA);
+        self.send_data_buf(&[0x49, 0x55, 0x20, 0x08, 0x09, 0x18]);
+    }
+
+    fn send_power_setting(&mut self) {
+        self.send_command(0x01);
+        self.send_data(0x3F);
+    }
+
+    fn send_panel_setting(&mut self) {
+        self.send_command(0x00);
+        self.send_data_buf(&[0x5F, 0x69]);
+    }
+
+    fn send_power_off_sequence(&mut self) {
+        self.send_command(0x03);
+        self.send_data_buf(&[0x00, 0x54, 0x00, 0x44]);
+    }
+
+    fn send_booster_start_a(&mut self) {
+        self.send_command(0x05);
+        self.send_data_buf(&[0x40, 0x1F, 0x1F, 0x2C]);
+    }
+
+    fn send_booster_start_b(&mut self) {
+        self.send_command(0x06);
+        self.send_data_buf(&[0x6F, 0x1F, 0x17, 0x49]);
+    }
+
+    fn send_booster_start_c(&mut self) {
+        self.send_command(0x08);
+        self.send_data_buf(&[0x6F, 0x1F, 0x1F, 0x22]);
+    }
+
+    fn send_pll_setting(&mut self) {
+        self.send_command(0x30);
+        self.send_data(0x03);
+    }
+
+    fn send_vcom_data_interval(&mut self) {
+        self.send_command(0x50);
+        self.send_data(0x3F);
+    }
+
+    fn send_tcon_setting(&mut self) {
+        self.send_command(0x60);
+        self.send_data_buf(&[0x02, 0x00]);
+    }
+
+    fn send_resolution(&mut self) {
+        self.send_command(0x61);
+        self.send_data_buf(&[0x03, 0x20, 0x01, 0xE0]);
+    }
+
+    fn send_tvdcs(&mut self) {
+        self.send_command(0x84);
+        self.send_data(0x01);
+    }
+
+    fn send_power_saving(&mut self) {
+        self.send_command(0xE3);
+        self.send_data(0x2F);
+    }
+
+    fn send_power_on(&mut self) {
+        self.send_command(0x04);
+    }
+
+    fn send_display_refresh(&mut self) {
+        self.send_command(0x12);
+        self.send_data(0x00);
+    }
+
+    fn send_power_off(&mut self) {
+        self.send_command(0x02);
+        self.send_data(0x00);
+    }
+
     fn init(&mut self) {
         self.reset();
         self.wait_busy();
         let delay = Delay::new();
         delay.delay_millis(50);
 
-        self.send_command(0xAA);
-        self.send_data_buf(&[0x49, 0x55, 0x20, 0x08, 0x09, 0x18]);
+        self.send_sequence_label();
+        self.send_power_setting();
+        self.send_panel_setting();
+        self.send_power_off_sequence();
+        self.send_booster_start_a();
+        self.send_booster_start_b();
+        self.send_booster_start_c();
+        self.send_pll_setting();
+        self.send_vcom_data_interval();
+        self.send_tcon_setting();
+        self.send_resolution();
+        self.send_tvdcs();
+        self.send_power_saving();
 
-        self.send_command(0x01);
-        self.send_data(0x3F);
-
-        self.send_command(0x00);
-        self.send_data_buf(&[0x5F, 0x69]);
-
-        self.send_command(0x03);
-        self.send_data_buf(&[0x00, 0x54, 0x00, 0x44]);
-
-        self.send_command(0x05);
-        self.send_data_buf(&[0x40, 0x1F, 0x1F, 0x2C]);
-
-        self.send_command(0x06);
-        self.send_data_buf(&[0x6F, 0x1F, 0x17, 0x49]);
-
-        self.send_command(0x08);
-        self.send_data_buf(&[0x6F, 0x1F, 0x1F, 0x22]);
-
-        self.send_command(0x30);
-        self.send_data(0x03);
-
-        self.send_command(0x50);
-        self.send_data(0x3F);
-
-        self.send_command(0x60);
-        self.send_data_buf(&[0x02, 0x00]);
-
-        // Resolution: 800 x 480 (0x0320 x 0x01E0)
-        self.send_command(0x61);
-        self.send_data_buf(&[0x03, 0x20, 0x01, 0xE0]);
-
-        self.send_command(0x84);
-        self.send_data(0x01);
-
-        self.send_command(0xE3);
-        self.send_data(0x2F);
-
-        // Power on and wait for display ready
-        self.send_command(0x04);
+        self.send_power_on();
         self.wait_busy();
     }
 
     fn turn_on_display(&mut self) {
-        self.send_command(0x04);
+        self.send_power_on();
         self.wait_busy();
-        self.send_command(0x06);
-        self.send_data_buf(&[0x6F, 0x1F, 0x17, 0x49]);
-        self.send_command(0x12); // display refresh
-        self.send_data(0x00);
+        self.send_booster_start_b();
+        self.send_display_refresh();
         self.wait_busy();
-        self.send_command(0x02); // power off
-        self.send_data(0x00);
+        self.send_power_off();
         self.wait_busy();
     }
 
@@ -188,7 +236,6 @@ impl<'d> EpaperPort<'d> {
 
         let row_bytes = (self.width / 2) as usize;
 
-        self.send_command(0x10);
         self.begin_pixels();
 
         for row in 0..self.height as usize {
@@ -243,7 +290,6 @@ impl<'d> EpaperPort<'d> {
 
         let row_bytes = (self.width / 2) as usize;
 
-        self.send_command(0x10);
         self.begin_pixels();
         for row in 0..self.height {
             // Phase shifts the palette by one per row, creating the diagonal.
@@ -336,7 +382,6 @@ impl<'d> EpaperPort<'d> {
         let text_x0: i32 = (w - text_w) / 2; // 225
         let text_y0: i32 = 388;
 
-        self.send_command(0x10);
         self.begin_pixels();
 
         for y in 0..h {
