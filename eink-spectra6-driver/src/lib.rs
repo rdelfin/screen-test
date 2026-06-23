@@ -1,88 +1,91 @@
 #![no_std]
 
-use esp_hal::delay::Delay;
-use esp_hal::gpio::interconnect::PeripheralOutput;
-use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin};
-use esp_hal::spi::Mode;
-use esp_hal::spi::master::{Config, Instance, Spi};
-use esp_hal::time::Rate;
+use embedded_hal::delay::DelayNs;
+use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::spi::SpiBus;
 
 pub struct Coordinates {
     pub x: u16,
     pub y: u16,
 }
 
-pub struct EpaperPort<'d> {
-    spi: Spi<'d, esp_hal::Blocking>,
-    dc: Output<'d>,
-    cs: Output<'d>,
-    rst: Output<'d>,
-    busy: Input<'d>,
+pub struct EpaperPort<SPI, DC, CS, RST, BUSY, DELAY> {
+    spi: SPI,
+    dc: DC,
+    cs: CS,
+    rst: RST,
+    busy: BUSY,
+    delay: DELAY,
     width: u16,
     height: u16,
 }
 
-impl<'d> EpaperPort<'d> {
+impl<SPI, DC, CS, RST, BUSY, DELAY> EpaperPort<SPI, DC, CS, RST, BUSY, DELAY>
+where
+    SPI: SpiBus<u8>,
+    DC: OutputPin,
+    CS: OutputPin,
+    RST: OutputPin,
+    BUSY: InputPin,
+    DELAY: DelayNs,
+{
+    /// Creates a new `EpaperPort` from pre-configured peripherals.
+    ///
+    /// The caller is responsible for constructing `spi` (an SPI bus with SCK and MOSI
+    /// already attached), `dc`/`cs`/`rst` as output pins, `busy` as an input pin, and
+    /// a `delay` source. Runs the display init sequence and clears to white before
+    /// returning.
     pub fn new(
-        spi: impl Instance + 'd,
-        sck: impl PeripheralOutput<'d>,
-        cs: impl OutputPin + 'd,
-        mosi: impl PeripheralOutput<'d>,
-        dc: impl OutputPin + 'd,
-        rst: impl OutputPin + 'd,
-        busy: impl InputPin + 'd,
+        spi: SPI,
+        dc: DC,
+        cs: CS,
+        rst: RST,
+        busy: BUSY,
+        delay: DELAY,
         width: u16,
         height: u16,
-    ) -> anyhow::Result<Self> {
-        let spi_config = Config::default()
-            .with_mode(Mode::_0)
-            .with_frequency(Rate::from_mhz(40));
-        let spi = Spi::new(spi, spi_config)?.with_sck(sck).with_mosi(mosi);
-        let dc = Output::new(dc, Level::Low, OutputConfig::default());
-        let cs = Output::new(cs, Level::High, OutputConfig::default());
-        let rst = Output::new(rst, Level::High, OutputConfig::default());
-        let busy = Input::new(busy, InputConfig::default());
-
+    ) -> Self {
         let mut port = EpaperPort {
             spi,
             dc,
             cs,
             rst,
             busy,
+            delay,
             width,
             height,
         };
         port.init();
         port.clear();
-        Ok(port)
+        port
     }
 
     fn send_command(&mut self, cmd: u8) {
-        self.dc.set_low();
-        self.cs.set_low();
+        self.dc.set_low().ok();
+        self.cs.set_low().ok();
         self.spi.write(&[cmd]).ok();
-        self.cs.set_high();
+        self.cs.set_high().ok();
     }
 
     fn send_data(&mut self, data: u8) {
-        self.dc.set_high();
-        self.cs.set_low();
+        self.dc.set_high().ok();
+        self.cs.set_low().ok();
         self.spi.write(&[data]).ok();
-        self.cs.set_high();
+        self.cs.set_high().ok();
     }
 
     fn send_data_buf(&mut self, data: &[u8]) {
-        self.dc.set_high();
-        self.cs.set_low();
+        self.dc.set_high().ok();
+        self.cs.set_low().ok();
         self.spi.write(data).ok();
-        self.cs.set_high();
+        self.cs.set_high().ok();
     }
 
     // Opens DTM (0x10) and holds CS low for the duration of a large pixel data transfer.
     fn begin_pixels(&mut self) {
         self.send_command(0x10);
-        self.dc.set_high();
-        self.cs.set_low();
+        self.dc.set_high().ok();
+        self.cs.set_low().ok();
     }
 
     fn send_pixels_chunk(&mut self, data: &[u8]) {
@@ -90,25 +93,23 @@ impl<'d> EpaperPort<'d> {
     }
 
     fn end_pixels(&mut self) {
-        self.cs.set_high();
+        self.cs.set_high().ok();
     }
 
     fn wait_busy(&mut self) {
-        let delay = Delay::new();
         // HIGH = display ready, LOW = display still processing
-        while self.busy.is_low() {
-            delay.delay_millis(10);
+        while self.busy.is_low().unwrap_or(false) {
+            self.delay.delay_ms(10);
         }
     }
 
     fn reset(&mut self) {
-        let delay = Delay::new();
-        self.rst.set_high();
-        delay.delay_millis(50);
-        self.rst.set_low();
-        delay.delay_millis(20);
-        self.rst.set_high();
-        delay.delay_millis(50);
+        self.rst.set_high().ok();
+        self.delay.delay_ms(50);
+        self.rst.set_low().ok();
+        self.delay.delay_ms(20);
+        self.rst.set_high().ok();
+        self.delay.delay_ms(50);
     }
 
     fn send_sequence_label(&mut self) {
@@ -193,8 +194,7 @@ impl<'d> EpaperPort<'d> {
     fn init(&mut self) {
         self.reset();
         self.wait_busy();
-        let delay = Delay::new();
-        delay.delay_millis(50);
+        self.delay.delay_ms(50);
 
         self.send_sequence_label();
         self.send_power_setting();
@@ -444,17 +444,5 @@ impl<'d> EpaperPort<'d> {
 
         self.end_pixels();
         self.turn_on_display();
-    }
-}
-
-#[cfg(test)]
-#[embedded_test::tests]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
     }
 }

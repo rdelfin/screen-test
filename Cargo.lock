@@ -316,12 +316,7 @@ dependencies = [
 name = "eink-spectra6-driver"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "defmt 1.0.1",
  "embedded-hal 1.0.0",
- "embedded-test",
- "esp-hal",
- "thiserror",
 ]
 
 [[package]]

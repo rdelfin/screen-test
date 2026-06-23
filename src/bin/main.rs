@@ -13,6 +13,11 @@ use eink_spectra6_driver::EpaperPort;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
+use esp_hal::delay::Delay;
+use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig};
+use esp_hal::spi::Mode;
+use esp_hal::spi::master::{Config, Spi};
+use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
@@ -49,18 +54,20 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let mut eink_port = EpaperPort::new(
-        peripherals.SPI3,
-        peripherals.GPIO10,
-        peripherals.GPIO9,
-        peripherals.GPIO11,
-        peripherals.GPIO8,
-        peripherals.GPIO12,
-        peripherals.GPIO13,
-        800,
-        480,
-    )
-    .expect("Failed to initialize EpaperPort");
+    let spi_config = Config::default()
+        .with_mode(Mode::_0)
+        .with_frequency(Rate::from_mhz(40));
+    let spi = Spi::new(peripherals.SPI3, spi_config)
+        .expect("Failed to initialize SPI")
+        .with_sck(peripherals.GPIO10)
+        .with_mosi(peripherals.GPIO11);
+    let dc = Output::new(peripherals.GPIO8, Level::Low, OutputConfig::default());
+    let cs = Output::new(peripherals.GPIO9, Level::High, OutputConfig::default());
+    let rst = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
+    let busy = Input::new(peripherals.GPIO13, InputConfig::default());
+    let delay = Delay::new();
+
+    let mut eink_port = EpaperPort::new(spi, dc, cs, rst, busy, delay, 800, 480);
     info!("EpaperPort initialized!");
     eink_port.fill_rect(10, 10, 300, 200, 0x3);
     // eink_port.display_checkerboard();
