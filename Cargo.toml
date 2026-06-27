@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "eink-spectra6-driver",
+  "rpi-screen-test",
   # "esp32_eink_test",
 ]
 resolver = "3"

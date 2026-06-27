@@ -1,0 +1,7 @@
+[package]
+name = "rpi-screen-test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eink-spectra6-driver = { path = "../eink-spectra6-driver" }
