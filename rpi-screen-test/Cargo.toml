@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = { version = "1.0.103", features = ["backtrace"] }
 eink-spectra6-driver = { path = "../eink-spectra6-driver" }
+gpio-cdev = "0.6.0"
+linux-embedded-hal = "0.4.1"
