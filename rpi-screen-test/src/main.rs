@@ -5,7 +5,7 @@ use linux_embedded_hal::{CdevPin, Delay, SpidevBus};
 
 fn main() -> anyhow::Result<()> {
     let mut chip = Chip::new("/dev/gpiochip0")?;
-    let pwr = chip
+    let _pwr = chip
         .get_line(27)?
         .request(LineRequestFlags::OUTPUT, 1, "pwr")?;
 
@@ -34,7 +34,7 @@ fn main() -> anyhow::Result<()> {
             .mode(SpiModeFlags::SPI_MODE_0 | SpiModeFlags::SPI_NO_CS)
             .build(),
     )?;
-    let mut epaper = EpaperPort::new(spi, dc, cs, rst, busy, Delay, 800, 480);
+    let mut epaper: EpaperPort<_, _, _, _, _, _> = EpaperPort::new(spi, dc, cs, rst, busy, Delay);
     epaper.display_sample();
     Ok(())
 }

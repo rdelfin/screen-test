@@ -4,6 +4,10 @@ use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::SpiBus;
 
+const WIDTH: u16 = 800;
+const HEIGHT: u16 = 480;
+const PX: usize = WIDTH as usize * HEIGHT as usize;
+
 pub struct Coordinates {
     pub x: u16,
     pub y: u16,
@@ -16,8 +20,7 @@ pub struct EpaperPort<SPI, DC, CS, RST, BUSY, DELAY> {
     rst: RST,
     busy: BUSY,
     delay: DELAY,
-    width: u16,
-    height: u16,
+    frame_buffer: [u8; PX],
 }
 
 impl<SPI, DC, CS, RST, BUSY, DELAY> EpaperPort<SPI, DC, CS, RST, BUSY, DELAY>
@@ -35,16 +38,7 @@ where
     /// already attached), `dc`/`cs`/`rst` as output pins, `busy` as an input pin, and
     /// a `delay` source. Runs the display init sequence and clears to white before
     /// returning.
-    pub fn new(
-        spi: SPI,
-        dc: DC,
-        cs: CS,
-        rst: RST,
-        busy: BUSY,
-        delay: DELAY,
-        width: u16,
-        height: u16,
-    ) -> Self {
+    pub fn new(spi: SPI, dc: DC, cs: CS, rst: RST, busy: BUSY, delay: DELAY) -> Self {
         let mut port = EpaperPort {
             spi,
             dc,
@@ -52,8 +46,7 @@ where
             rst,
             busy,
             delay,
-            width,
-            height,
+            frame_buffer: [0u8; PX],
         };
         port.init();
         port.clear();
@@ -224,6 +217,15 @@ where
         self.wait_busy();
     }
 
+    pub fn render(&mut self) {
+        self.begin_pixels();
+
+        self.spi.write(&self.frame_buffer[..]).ok();
+
+        self.end_pixels();
+        self.turn_on_display();
+    }
+
     /// Fills a rectangular region with a solid color and the rest of the screen with white.
     ///
     /// Coordinates are clamped to the display bounds. `color` is a 4-bit palette code:
@@ -231,14 +233,14 @@ where
     pub fn fill_rect(&mut self, x: u16, y: u16, width: u16, height: u16, color: u8) {
         let x0 = x as usize;
         let y0 = y as usize;
-        let x1 = (x + width).min(self.width) as usize;
-        let y1 = (y + height).min(self.height) as usize;
+        let x1 = (x + width).min(WIDTH) as usize;
+        let y1 = (y + height).min(HEIGHT) as usize;
 
-        let row_bytes = (self.width / 2) as usize;
+        let row_bytes = (WIDTH / 2) as usize;
 
         self.begin_pixels();
 
-        for row in 0..self.height as usize {
+        for row in 0..HEIGHT as usize {
             let in_row = row >= y0 && row < y1;
             let mut sent = 0usize;
             while sent < row_bytes {
@@ -269,7 +271,7 @@ where
 
     /// Clears the display to solid white. Called automatically on initialisation.
     pub fn clear(&mut self) {
-        let (w, h) = (self.width, self.height);
+        let (w, h) = (WIDTH, HEIGHT);
         self.fill_rect(0, 0, w, h, 0x1);
     }
 
@@ -288,10 +290,10 @@ where
         // 4-bit color codes for the six available pigments, in cycle order.
         const PALETTE: [u8; 6] = [0x0, 0x1, 0x2, 0x3, 0x5, 0x6];
 
-        let row_bytes = (self.width / 2) as usize;
+        let row_bytes = (WIDTH / 2) as usize;
 
         self.begin_pixels();
-        for row in 0..self.height {
+        for row in 0..HEIGHT {
             // Phase shifts the palette by one per row, creating the diagonal.
             let p = (row as usize) % 6;
 
@@ -334,8 +336,8 @@ where
         const RED: u8 = 0x3;
         const GREEN: u8 = 0x6;
 
-        let w = self.width as i32;
-        let h = self.height as i32;
+        let w = WIDTH as i32;
+        let h = HEIGHT as i32;
 
         // ── Flag bounds ──────────────────────────────────────────────────────
         let flag_x0: i32 = 100;
@@ -428,7 +430,7 @@ where
                 }
             };
 
-            let row_bytes = (self.width / 2) as usize;
+            let row_bytes = (WIDTH / 2) as usize;
             let mut sent = 0usize;
             while sent < row_bytes {
                 let chunk_size = (row_bytes - sent).min(64);
