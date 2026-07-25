@@ -216,7 +216,12 @@ where
     pub fn render(&mut self) {
         self.begin_pixels();
 
-        self.spi.write(&self.frame_buffer[..]).ok();
+        // The Linux spidev character device rejects any single write() larger than
+        // its `bufsiz` (default 4096 bytes on Raspberry Pi OS) with -EMSGSIZE, so the
+        // full buffer must be streamed in bounded chunks rather than in one write.
+        for chunk in self.frame_buffer.chunks(64) {
+            self.spi.write(chunk).ok();
+        }
 
         self.end_pixels();
         self.turn_on_display();
