@@ -36,5 +36,6 @@ fn main() -> anyhow::Result<()> {
     )?;
     let mut epaper: EpaperPort<_, _, _, _, _, _> = EpaperPort::new(spi, dc, cs, rst, busy, Delay);
     epaper.display_sample();
+    epaper.render();
     Ok(())
 }

@@ -81,10 +81,6 @@ where
         self.cs.set_low().ok();
     }
 
-    fn send_pixels_chunk(&mut self, data: &[u8]) {
-        self.spi.write(data).ok();
-    }
-
     fn end_pixels(&mut self) {
         self.cs.set_high().ok();
     }
@@ -226,7 +222,9 @@ where
         self.turn_on_display();
     }
 
-    /// Fills a rectangular region with a solid color and the rest of the screen with white.
+    /// Overlays a rectangular region of solid color onto the frame buffer, leaving
+    /// every pixel outside the rectangle untouched. Call `render()` to push the
+    /// updated buffer to the display.
     ///
     /// Coordinates are clamped to the display bounds. `color` is a 4-bit palette code:
     /// Black(0x0), White(0x1), Yellow(0x2), Red(0x3), Blue(0x5), Green(0x6).
@@ -238,35 +236,17 @@ where
 
         let row_bytes = (WIDTH / 2) as usize;
 
-        self.begin_pixels();
-
-        for row in 0..HEIGHT as usize {
-            let in_row = row >= y0 && row < y1;
-            let mut sent = 0usize;
-            while sent < row_bytes {
-                let chunk_size = (row_bytes - sent).min(64);
-                let mut chunk = [0u8; 64];
-                for i in 0..chunk_size {
-                    let px = (sent + i) * 2;
-                    let c0 = if in_row && px >= x0 && px < x1 {
-                        color
-                    } else {
-                        0x1
-                    };
-                    let c1 = if in_row && px + 1 >= x0 && px + 1 < x1 {
-                        color
-                    } else {
-                        0x1
-                    };
-                    chunk[i] = (c0 << 4) | c1;
+        for row in y0..y1 {
+            let row_start = row * row_bytes;
+            for px in x0..x1 {
+                let idx = row_start + px / 2;
+                if px % 2 == 0 {
+                    self.frame_buffer[idx] = (self.frame_buffer[idx] & 0x0F) | (color << 4);
+                } else {
+                    self.frame_buffer[idx] = (self.frame_buffer[idx] & 0xF0) | color;
                 }
-                self.send_pixels_chunk(&chunk[..chunk_size]);
-                sent += chunk_size;
             }
         }
-
-        self.end_pixels();
-        self.turn_on_display();
     }
 
     /// Clears the display to solid white. Called automatically on initialisation.
@@ -286,16 +266,17 @@ where
     ///
     /// Pixel encoding: 4bpp, 2 pixels per byte (high nibble = even x, low nibble = odd x).
     /// The 6-pixel color cycle maps to a 3-byte pattern that repeats across each row.
+    ///
+    /// Replaces the entire frame buffer. Call `render()` to push it to the display.
     pub fn display_checkerboard(&mut self) {
         // 4-bit color codes for the six available pigments, in cycle order.
         const PALETTE: [u8; 6] = [0x0, 0x1, 0x2, 0x3, 0x5, 0x6];
 
         let row_bytes = (WIDTH / 2) as usize;
 
-        self.begin_pixels();
-        for row in 0..HEIGHT {
+        for row in 0..HEIGHT as usize {
             // Phase shifts the palette by one per row, creating the diagonal.
-            let p = (row as usize) % 6;
+            let p = row % 6;
 
             // Six consecutive pixels pack into exactly 3 bytes, then repeat.
             let pattern = [
@@ -304,20 +285,11 @@ where
                 (PALETTE[(p + 4) % 6] << 4) | PALETTE[(p + 5) % 6],
             ];
 
-            let mut sent = 0;
-            while sent < row_bytes {
-                let chunk_size = (row_bytes - sent).min(64);
-                let mut chunk = [0u8; 64];
-                for i in 0..chunk_size {
-                    chunk[i] = pattern[(sent + i) % 3];
-                }
-                self.send_pixels_chunk(&chunk[..chunk_size]);
-                sent += chunk_size;
+            let row_start = row * row_bytes;
+            for i in 0..row_bytes {
+                self.frame_buffer[row_start + i] = pattern[i % 3];
             }
         }
-        self.end_pixels();
-
-        self.turn_on_display();
     }
 
     /// Renders a Mexican flag with a brown circle in place of the coat of arms, plus
@@ -330,6 +302,8 @@ where
     ///   - A brown circle (r=65) centered in the white stripe at (400, 210). Brown is
     ///     approximated by a Red/Black checkerboard dither pattern.
     ///   - "MEXICO" in black block letters (5×7 font, 10× scale) centered below the flag.
+    ///
+    /// Replaces the entire frame buffer. Call `render()` to push it to the display.
     pub fn display_sample(&mut self) {
         const BLACK: u8 = 0x0;
         const WHITE: u8 = 0x1;
@@ -384,8 +358,6 @@ where
         let text_x0: i32 = (w - text_w) / 2; // 225
         let text_y0: i32 = 388;
 
-        self.begin_pixels();
-
         for y in 0..h {
             let color = |x: i32| -> u8 {
                 // ── Outside the flag: white background or "MEXICO" label ─────
@@ -431,20 +403,11 @@ where
             };
 
             let row_bytes = (WIDTH / 2) as usize;
-            let mut sent = 0usize;
-            while sent < row_bytes {
-                let chunk_size = (row_bytes - sent).min(64);
-                let mut chunk = [0u8; 64];
-                for i in 0..chunk_size {
-                    let x = ((sent + i) * 2) as i32;
-                    chunk[i] = (color(x) << 4) | color(x + 1);
-                }
-                self.send_pixels_chunk(&chunk[..chunk_size]);
-                sent += chunk_size;
+            let row_start = y as usize * row_bytes;
+            for i in 0..row_bytes {
+                let x = (i * 2) as i32;
+                self.frame_buffer[row_start + i] = (color(x) << 4) | color(x + 1);
             }
         }
-
-        self.end_pixels();
-        self.turn_on_display();
     }
 }
