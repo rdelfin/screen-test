@@ -113,7 +113,7 @@ where
 
     fn send_panel_setting(&mut self) {
         self.send_command(0x00);
-        self.send_data_buf(&[0x5F, 0x69]);
+        self.send_data_buf(&[0x53, 0x69]);
     }
 
     fn send_power_off_sequence(&mut self) {

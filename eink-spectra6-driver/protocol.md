@@ -78,19 +78,23 @@ Sending only byte A leaves B–E at their power-on defaults.
 
 ### `0x00` PSR — Panel Setting Register
 
-**Data:** `[0x5F, 0x69]`
+**Data:** `[0x53, 0x69]`
 
-**Byte A = `0x5F` = `0b01011111`:**
+**Byte A = `0x53` = `0b01010011`:**
 
 | Bits   | Field   | Value | Meaning |
 |--------|---------|-------|---------|
 | A[7:6] | RES[1:0]| `01`  | Resolution hint (overridden by TRES `0x61`; actual 800×480) |
 | A[5]   | RESA    | `0`   | Resolution sub-select |
 | A[4]   | —       | `1`   | Reserved |
-| A[3]   | UD      | `1`   | Gate scan direction: up (G0 → Gn-1) |
-| A[2]   | SHL     | `1`   | Source shift direction: right (S0 → Sn-1) |
+| A[3]   | UD      | `0`   | Gate scan direction: up (G0 → Gn-1) |
+| A[2]   | SHL     | `0`   | Source shift direction: right (S0 → Sn-1) |
 | A[1]   | SHD_N   | `1`   | Booster and regulator ON |
 | A[0]   | RST_N   | `1`   | Normal operation (not in soft reset) |
+
+An interesting note is that you can change bytes A3 and A2 to change the orientation of the
+display. Flipping the value of `UD` and `SHL` has the practical effect of flipping the image 180
+degrees.
 
 **Byte B = `0x69` = `0b01101001`:**
 
