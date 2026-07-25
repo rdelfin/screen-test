@@ -6,7 +6,7 @@ use embedded_hal::spi::SpiBus;
 
 const WIDTH: u16 = 800;
 const HEIGHT: u16 = 480;
-const PX: usize = WIDTH as usize * HEIGHT as usize;
+const PX: usize = (WIDTH as usize / 2) * HEIGHT as usize;
 
 pub struct Coordinates {
     pub x: u16,
