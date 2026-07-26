@@ -4,9 +4,10 @@ use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::SpiBus;
 
-const WIDTH: u16 = 800;
-const HEIGHT: u16 = 480;
-const PX: usize = (WIDTH as usize / 2) * HEIGHT as usize;
+pub const WIDTH: u16 = 800;
+pub const ROW_BYTES: u16 = WIDTH / 2;
+pub const HEIGHT: u16 = 480;
+const PX: usize = ROW_BYTES as usize * HEIGHT as usize;
 
 pub struct Coordinates {
     pub x: u16,
@@ -53,6 +54,8 @@ where
         port
     }
 
+    /// Call this function to render what you've accumulated in the frame buffer to the eink
+    /// display.
     pub fn render(&mut self) {
         self.begin_pixels();
 
@@ -65,6 +68,44 @@ where
 
         self.end_pixels();
         self.turn_on_display();
+    }
+
+    /// Set a section of the buffer manually. Please note the convention this screen uses when
+    /// drawing on the frame buffer:
+    ///
+    /// - The screen is [`Self::WIDTH`] by [`Self::HEIGHT`] pixels in size (we render oriented with
+    ///   the screen laying on its side).
+    /// - Each byte contains two pixels, with each nibble representing a single 4-bit colour code
+    /// - The colours are, in order are Black (0x0), White (0x1), Yellow (0x2), Red (0x3), Blue
+    ///   (0x5) and Green (0x6). Notice it skips 0x4
+    ///
+    /// If the provided data goes over the length of the buffer, we will ignore the rest of the data
+    /// silently.
+    pub fn set_buffer(&mut self, byte_offset: usize, data: &[u8]) {
+        let end = (byte_offset + data.len()).min(self.frame_buffer.len());
+        self.frame_buffer[byte_offset..end].copy_from_slice(&data[..(end - byte_offset)]);
+    }
+
+    // Set a row of pixels in the frame buffer. This might make it easier to render if you're just
+    // trying to fill out a row at a time. Please read the documentation for [`Self::set_buffer`]
+    // to understand the pixel format and colour codes, but TL;DR, each byte contains two pixels,
+    // and each nibble represents a single 4-bit colour code.
+    //
+    // # Arguments
+    // * `idx`: The row index to set, starting at 0 for the top row, up to [`HEIGHT`] - 1
+    // * `data`: An array of bytes representing the pixel data for the row
+    pub fn set_pixel_row(&mut self, idx: u16, data: [u8; ROW_BYTES as usize]) {
+        if idx < HEIGHT {
+            let offset = (idx as usize) * (ROW_BYTES as usize);
+            self.frame_buffer[offset..offset + (ROW_BYTES as usize)].copy_from_slice(&data);
+        } else {
+            tracing::warn!(
+                component = "spectra6-driver",
+                row_idx = idx,
+                func = "set_pixel_row",
+                "row index out of bounds",
+            );
+        }
     }
 
     /// Overlays a rectangular region of solid color onto the frame buffer, leaving
