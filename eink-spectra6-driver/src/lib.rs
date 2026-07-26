@@ -1,30 +1,22 @@
 #![no_std]
 
+pub mod device;
+
+use crate::device::{HEIGHT, ROW_BYTES, Spectra6Screen, Spectra6SpiDriver, WIDTH};
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::SpiBus;
-
-pub const WIDTH: u16 = 800;
-pub const ROW_BYTES: u16 = WIDTH / 2;
-pub const HEIGHT: u16 = 480;
-const PX: usize = ROW_BYTES as usize * HEIGHT as usize;
 
 pub struct Coordinates {
     pub x: u16,
     pub y: u16,
 }
 
-pub struct EpaperPort<SPI, DC, CS, RST, BUSY, DELAY> {
-    spi: SPI,
-    dc: DC,
-    cs: CS,
-    rst: RST,
-    busy: BUSY,
-    delay: DELAY,
-    frame_buffer: [u8; PX],
+pub struct EpaperDisplay<SPI, DC, CS, RST, BUSY, DELAY> {
+    driver: Spectra6SpiDriver<SPI, DC, CS, RST, BUSY, DELAY>,
 }
 
-impl<SPI, DC, CS, RST, BUSY, DELAY> EpaperPort<SPI, DC, CS, RST, BUSY, DELAY>
+impl<SPI, DC, CS, RST, BUSY, DELAY> EpaperDisplay<SPI, DC, CS, RST, BUSY, DELAY>
 where
     SPI: SpiBus<u8>,
     DC: OutputPin,
@@ -39,73 +31,13 @@ where
     /// already attached), `dc`/`cs`/`rst` as output pins, `busy` as an input pin, and
     /// a `delay` source. Runs the display init sequence and clears to white before
     /// returning.
-    pub fn new(spi: SPI, dc: DC, cs: CS, rst: RST, busy: BUSY, delay: DELAY) -> Self {
-        let mut port = EpaperPort {
-            spi,
-            dc,
-            cs,
-            rst,
-            busy,
-            delay,
-            frame_buffer: [0u8; PX],
-        };
-        port.init();
-        port.clear();
-        port
+    pub fn new(driver: Spectra6SpiDriver<SPI, DC, CS, RST, BUSY, DELAY>) -> Self {
+        EpaperDisplay { driver }
     }
 
-    /// Call this function to render what you've accumulated in the frame buffer to the eink
-    /// display.
+    /// Call this function to render what you've built up to the underlying screen/driver.
     pub fn render(&mut self) {
-        self.begin_pixels();
-
-        // The Linux spidev character device rejects any single write() larger than
-        // its `bufsiz` (default 4096 bytes on Raspberry Pi OS) with -EMSGSIZE, so the
-        // full buffer must be streamed in bounded chunks rather than in one write.
-        for chunk in self.frame_buffer.chunks(64) {
-            self.spi.write(chunk).ok();
-        }
-
-        self.end_pixels();
-        self.turn_on_display();
-    }
-
-    /// Set a section of the buffer manually. Please note the convention this screen uses when
-    /// drawing on the frame buffer:
-    ///
-    /// - The screen is [`Self::WIDTH`] by [`Self::HEIGHT`] pixels in size (we render oriented with
-    ///   the screen laying on its side).
-    /// - Each byte contains two pixels, with each nibble representing a single 4-bit colour code
-    /// - The colours are, in order are Black (0x0), White (0x1), Yellow (0x2), Red (0x3), Blue
-    ///   (0x5) and Green (0x6). Notice it skips 0x4
-    ///
-    /// If the provided data goes over the length of the buffer, we will ignore the rest of the data
-    /// silently.
-    pub fn set_buffer(&mut self, byte_offset: usize, data: &[u8]) {
-        let end = (byte_offset + data.len()).min(self.frame_buffer.len());
-        self.frame_buffer[byte_offset..end].copy_from_slice(&data[..(end - byte_offset)]);
-    }
-
-    // Set a row of pixels in the frame buffer. This might make it easier to render if you're just
-    // trying to fill out a row at a time. Please read the documentation for [`Self::set_buffer`]
-    // to understand the pixel format and colour codes, but TL;DR, each byte contains two pixels,
-    // and each nibble represents a single 4-bit colour code.
-    //
-    // # Arguments
-    // * `idx`: The row index to set, starting at 0 for the top row, up to [`HEIGHT`] - 1
-    // * `data`: An array of bytes representing the pixel data for the row
-    pub fn set_pixel_row(&mut self, idx: u16, data: [u8; ROW_BYTES as usize]) {
-        if idx < HEIGHT {
-            let offset = (idx as usize) * (ROW_BYTES as usize);
-            self.frame_buffer[offset..offset + (ROW_BYTES as usize)].copy_from_slice(&data);
-        } else {
-            tracing::warn!(
-                component = "spectra6-driver",
-                row_idx = idx,
-                func = "set_pixel_row",
-                "row index out of bounds",
-            );
-        }
+        self.driver.render();
     }
 
     /// Overlays a rectangular region of solid color onto the frame buffer, leaving
@@ -115,30 +47,28 @@ where
     /// Coordinates are clamped to the display bounds. `color` is a 4-bit palette code:
     /// Black(0x0), White(0x1), Yellow(0x2), Red(0x3), Blue(0x5), Green(0x6).
     pub fn fill_rect(&mut self, x: u16, y: u16, width: u16, height: u16, color: u8) {
-        let x0 = x as usize;
-        let y0 = y as usize;
-        let x1 = (x + width).min(WIDTH) as usize;
-        let y1 = (y + height).min(HEIGHT) as usize;
-
-        let row_bytes = (WIDTH / 2) as usize;
+        let x0 = x;
+        let y0 = y;
+        let x1 = (x + width).min(WIDTH);
+        let y1 = (y + height).min(HEIGHT);
 
         for row in y0..y1 {
-            let row_start = row * row_bytes;
+            let mut row_buffer = [0x0; ROW_BYTES as usize];
             for px in x0..x1 {
-                let idx = row_start + px / 2;
+                let idx = (px / 2) as usize;
                 if px % 2 == 0 {
-                    self.frame_buffer[idx] = (self.frame_buffer[idx] & 0x0F) | (color << 4);
+                    row_buffer[idx] = (row_buffer[idx] & 0x0F) | (color << 4);
                 } else {
-                    self.frame_buffer[idx] = (self.frame_buffer[idx] & 0xF0) | color;
+                    row_buffer[idx] = (row_buffer[idx] & 0xF0) | color;
                 }
             }
+            self.driver.set_pixel_row(row, row_buffer, x0, x1);
         }
     }
 
     /// Clears the display to solid white. Called automatically on initialisation.
     pub fn clear(&mut self) {
-        let (w, h) = (WIDTH, HEIGHT);
-        self.fill_rect(0, 0, w, h, 0x1);
+        self.driver.clear();
     }
 
     /// Sends a pattern to the display that exercises all six available colors.
@@ -171,10 +101,11 @@ where
                 (PALETTE[(p + 4) % 6] << 4) | PALETTE[(p + 5) % 6],
             ];
 
-            let row_start = row * row_bytes;
+            let mut row_buffer = [0u8; ROW_BYTES as usize];
             for i in 0..row_bytes {
-                self.frame_buffer[row_start + i] = pattern[i % 3];
+                row_buffer[i] = pattern[i % 3];
             }
+            self.driver.set_pixel_row(row as u16, row_buffer, 0, WIDTH);
         }
     }
 
@@ -288,172 +219,12 @@ where
                 }
             };
 
-            let row_bytes = (WIDTH / 2) as usize;
-            let row_start = y as usize * row_bytes;
-            for i in 0..row_bytes {
+            let mut row_buffer = [0u8; ROW_BYTES as usize];
+            for i in 0..ROW_BYTES {
                 let x = (i * 2) as i32;
-                self.frame_buffer[row_start + i] = (color(x) << 4) | color(x + 1);
+                row_buffer[i as usize] = (color(x) << 4) | color(x + 1);
             }
+            self.driver.set_pixel_row(y as u16, row_buffer, 0, WIDTH);
         }
-    }
-
-    fn send_command(&mut self, cmd: u8) {
-        self.dc.set_low().ok();
-        self.cs.set_low().ok();
-        self.spi.write(&[cmd]).ok();
-        self.cs.set_high().ok();
-    }
-
-    fn send_data(&mut self, data: u8) {
-        self.dc.set_high().ok();
-        self.cs.set_low().ok();
-        self.spi.write(&[data]).ok();
-        self.cs.set_high().ok();
-    }
-
-    fn send_data_buf(&mut self, data: &[u8]) {
-        self.dc.set_high().ok();
-        self.cs.set_low().ok();
-        self.spi.write(data).ok();
-        self.cs.set_high().ok();
-    }
-
-    // Opens DTM (0x10) and holds CS low for the duration of a large pixel data transfer.
-    fn begin_pixels(&mut self) {
-        self.send_command(0x10);
-        self.dc.set_high().ok();
-        self.cs.set_low().ok();
-    }
-
-    fn end_pixels(&mut self) {
-        self.cs.set_high().ok();
-    }
-
-    fn wait_busy(&mut self) {
-        // HIGH = display ready, LOW = display still processing
-        while self.busy.is_low().unwrap_or(false) {
-            self.delay.delay_ms(10);
-        }
-    }
-
-    fn reset(&mut self) {
-        self.rst.set_high().ok();
-        self.delay.delay_ms(50);
-        self.rst.set_low().ok();
-        self.delay.delay_ms(20);
-        self.rst.set_high().ok();
-        self.delay.delay_ms(50);
-    }
-
-    fn send_sequence_label(&mut self) {
-        self.send_command(0xAA);
-        self.send_data_buf(&[0x49, 0x55, 0x20, 0x08, 0x09, 0x18]);
-    }
-
-    fn send_power_setting(&mut self) {
-        self.send_command(0x01);
-        self.send_data(0x3F);
-    }
-
-    fn send_panel_setting(&mut self) {
-        self.send_command(0x00);
-        self.send_data_buf(&[0x53, 0x69]);
-    }
-
-    fn send_power_off_sequence(&mut self) {
-        self.send_command(0x03);
-        self.send_data_buf(&[0x00, 0x54, 0x00, 0x44]);
-    }
-
-    fn send_booster_start_a(&mut self) {
-        self.send_command(0x05);
-        self.send_data_buf(&[0x40, 0x1F, 0x1F, 0x2C]);
-    }
-
-    fn send_booster_start_b(&mut self) {
-        self.send_command(0x06);
-        self.send_data_buf(&[0x6F, 0x1F, 0x17, 0x49]);
-    }
-
-    fn send_booster_start_c(&mut self) {
-        self.send_command(0x08);
-        self.send_data_buf(&[0x6F, 0x1F, 0x1F, 0x22]);
-    }
-
-    fn send_pll_setting(&mut self) {
-        self.send_command(0x30);
-        self.send_data(0x03);
-    }
-
-    fn send_vcom_data_interval(&mut self) {
-        self.send_command(0x50);
-        self.send_data(0x3F);
-    }
-
-    fn send_tcon_setting(&mut self) {
-        self.send_command(0x60);
-        self.send_data_buf(&[0x02, 0x00]);
-    }
-
-    fn send_resolution(&mut self) {
-        self.send_command(0x61);
-        self.send_data_buf(&[0x03, 0x20, 0x01, 0xE0]);
-    }
-
-    fn send_tvdcs(&mut self) {
-        self.send_command(0x84);
-        self.send_data(0x01);
-    }
-
-    fn send_power_saving(&mut self) {
-        self.send_command(0xE3);
-        self.send_data(0x2F);
-    }
-
-    fn send_power_on(&mut self) {
-        self.send_command(0x04);
-    }
-
-    fn send_display_refresh(&mut self) {
-        self.send_command(0x12);
-        self.send_data(0x00);
-    }
-
-    fn send_power_off(&mut self) {
-        self.send_command(0x02);
-        self.send_data(0x00);
-    }
-
-    fn init(&mut self) {
-        self.reset();
-        self.wait_busy();
-        self.delay.delay_ms(50);
-
-        self.send_sequence_label();
-        self.send_power_setting();
-        self.send_panel_setting();
-        self.send_power_off_sequence();
-        self.send_booster_start_a();
-        self.send_booster_start_b();
-        self.send_booster_start_c();
-        self.send_pll_setting();
-        self.send_vcom_data_interval();
-        self.send_tcon_setting();
-        self.send_resolution();
-        self.send_tvdcs();
-        self.send_power_saving();
-
-        self.send_power_on();
-        self.wait_busy();
-    }
-
-    fn turn_on_display(&mut self) {
-        self.send_power_on();
-        self.wait_busy();
-        self.send_booster_start_b();
-        self.send_display_refresh();
-        self.wait_busy();
-        self.send_power_off();
-        self.wait_busy();
     }
 }
