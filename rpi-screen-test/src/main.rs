@@ -45,8 +45,7 @@ fn main() -> anyhow::Result<()> {
             .mode(SpiModeFlags::SPI_MODE_0 | SpiModeFlags::SPI_NO_CS)
             .build(),
     )?;
-    let mut epaper: EpaperDisplay<_, _, _, _, _, _> =
-        EpaperDisplay::new(Spectra6SpiDriver::new(spi, dc, cs, rst, busy, Delay));
+    let mut epaper = EpaperDisplay::new(Spectra6SpiDriver::new(spi, dc, cs, rst, busy, Delay));
 
     tracing::info!("Printing double rectangles to the screen");
     epaper.fill_rect(100, 100, 200, 200, 0x6);

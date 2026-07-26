@@ -1,35 +1,24 @@
 pub mod device;
 
-use crate::device::{HEIGHT, ROW_BYTES, Spectra6Screen, Spectra6SpiDriver, WIDTH};
-use embedded_hal::delay::DelayNs;
-use embedded_hal::digital::{InputPin, OutputPin};
-use embedded_hal::spi::SpiBus;
+use crate::device::{HEIGHT, ROW_BYTES, Spectra6Screen, WIDTH};
 
 pub struct Coordinates {
     pub x: u16,
     pub y: u16,
 }
 
-pub struct EpaperDisplay<SPI, DC, CS, RST, BUSY, DELAY> {
-    driver: Spectra6SpiDriver<SPI, DC, CS, RST, BUSY, DELAY>,
+pub struct EpaperDisplay<D: Spectra6Screen> {
+    driver: D,
 }
 
-impl<SPI, DC, CS, RST, BUSY, DELAY> EpaperDisplay<SPI, DC, CS, RST, BUSY, DELAY>
-where
-    SPI: SpiBus<u8>,
-    DC: OutputPin,
-    CS: OutputPin,
-    RST: OutputPin,
-    BUSY: InputPin,
-    DELAY: DelayNs,
-{
+impl<D: Spectra6Screen> EpaperDisplay<D> {
     /// Creates a new `EpaperPort` from pre-configured peripherals.
     ///
     /// The caller is responsible for constructing `spi` (an SPI bus with SCK and MOSI
     /// already attached), `dc`/`cs`/`rst` as output pins, `busy` as an input pin, and
     /// a `delay` source. Runs the display init sequence and clears to white before
     /// returning.
-    pub fn new(driver: Spectra6SpiDriver<SPI, DC, CS, RST, BUSY, DELAY>) -> Self {
+    pub fn new(driver: D) -> Self {
         EpaperDisplay { driver }
     }
 
