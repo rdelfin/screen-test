@@ -1,5 +1,3 @@
-#![no_std]
-
 pub mod device;
 
 use crate::device::{HEIGHT, ROW_BYTES, Spectra6Screen, Spectra6SpiDriver, WIDTH};

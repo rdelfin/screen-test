@@ -6,6 +6,7 @@
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::SpiBus;
+use std::time::Instant;
 
 pub const WIDTH: u16 = 800;
 pub const ROW_BYTES: u16 = WIDTH / 2;
@@ -78,6 +79,7 @@ where
     DELAY: DelayNs,
 {
     fn render(&mut self) {
+        let start = Instant::now();
         self.begin_pixels();
 
         // The Linux spidev character device rejects any single write() larger than
@@ -89,6 +91,13 @@ where
 
         self.end_pixels();
         self.turn_on_display();
+        let duration = start.elapsed();
+        tracing::info!(
+            component = "spectra6-spi-driver",
+            duration_ms = duration.as_millis(),
+            func = "render",
+            "rendered frame buffer to display",
+        );
     }
 
     fn set_buffer(&mut self, byte_offset: usize, data: &[u8]) {
@@ -97,7 +106,7 @@ where
         let data = &data[..len_written];
         if data.is_empty() {
             tracing::warn!(
-                component = "spectra6-driver",
+                component = "spectra6-spi-driver",
                 byte_offset = byte_offset,
                 data_len = data.len(),
                 func = "set_buffer",
@@ -138,7 +147,7 @@ where
             }
         } else {
             tracing::warn!(
-                component = "spectra6-driver",
+                component = "spectra6-spi-driver",
                 row_idx = idx,
                 func = "set_pixel_row",
                 "row index out of bounds",
